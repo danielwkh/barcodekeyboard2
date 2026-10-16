@@ -6,4 +6,8 @@
         <item name="android:statusBarColor">#111B21</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+    <style name="PermissionGateTheme" parent="android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowNoTitle">true</item>
+    </style>
 </resources>

@@ -6,6 +6,7 @@
             <intent-filter><action android:name="android.view.InputMethod" /></intent-filter>
             <meta-data android:name="android.view.im" android:resource="@xml/method" />
         </service>
-        <activity android:name=".ScannerActivity" android:label="Scan barcode" android:exported="false" android:screenOrientation="portrait" />
+        <activity android:name=".ScannerActivity" android:label="Camera permission" android:theme="@style/PermissionGateTheme" android:exported="false" android:excludeFromRecents="true" />
+        <activity android:name=".ProductImportActivity" android:label="匯入商品資料" android:exported="false" />
     </application>
 </manifest>

@@ -1,0 +1,16 @@
+Third-party input dictionaries bundled with Barcode Keyboard 2
+
+1. luna_pinyin.dict.yaml
+   Source: https://github.com/rime/rime-luna-pinyin
+   License: LGPL-3.0 (see LICENSE-PINYIN.txt)
+   The dictionary content is redistributed as provided by upstream; the app builds a local candidate index from its text/code columns.
+
+2. cangjie5.base.dict.yaml
+   Source: https://github.com/rime/rime-cangjie
+   Repository license: LGPL-3.0 (see LICENSE-CANGJIE.txt); the dictionary file's own header describes its code table as GPL. Preserve upstream attribution and license terms.
+   Barcode Keyboard derives a two-key quick (速成) lookup key from the first and last code letters.
+
+3. stroke.dict.yaml
+   Source: https://github.com/rime/rime-stroke
+   License: LGPL-3.0 (see LICENSE-STROKE.txt)
+   The dictionary content is redistributed as provided by upstream; the app indexes the five stroke codes h/s/p/n/z locally.
