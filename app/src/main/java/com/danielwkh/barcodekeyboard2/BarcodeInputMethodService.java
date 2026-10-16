@@ -357,9 +357,11 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
         }, ContextCompat.getMainExecutor(this));
     }
     private void deliverScan(String value) {
+        boolean barcodeScan = !textScan;
         String output = value;
         if (outputProductName && !textScan) { String name = ProductCatalog.nameFor(this, value); if (!name.isEmpty()) output = name; else Toast.makeText(this, "找不到此條碼的商品資料，已輸入條碼", Toast.LENGTH_SHORT).show(); }
         composition = ""; commitReplacingPreviousScan(output); closeScanner();
+        if (barcodeScan) enter();
     }
     private void commitReplacingPreviousScan(String value) {
         InputConnection ic = getCurrentInputConnection(); if (ic == null) return;
