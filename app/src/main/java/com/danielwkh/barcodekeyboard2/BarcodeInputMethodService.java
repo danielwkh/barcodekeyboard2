@@ -10,6 +10,7 @@ import android.inputmethodservice.InputMethodService;
 import android.os.Handler;
 import android.os.Looper;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
@@ -61,6 +62,7 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
     private boolean outputProductName = false;
     private boolean shifted = false;
     private boolean numericMode = false;
+    private String lastScannedText;
     private ProcessCameraProvider cameraProvider;
     private ImageAnalysis imageAnalysis;
     private ExecutorService cameraExecutor;
@@ -77,6 +79,10 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
     }
     @Override public Lifecycle getLifecycle() { return lifecycle; }
     @Override public View onCreateInputView() { return buildView(); }
+    @Override public void onStartInput(EditorInfo info, boolean restarting) {
+        super.onStartInput(info, restarting);
+        if (!restarting) lastScannedText = null;
+    }
     @Override public void onWindowShown() { super.onWindowShown(); applyImeWindowHeight(); }
     @Override public void onStartInputView(EditorInfo info, boolean restarting) {
         super.onStartInputView(info, restarting);
@@ -114,7 +120,24 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
     private TextView text(String value, int size, int color) { TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(color); t.setGravity(Gravity.CENTER); return t; }
     private Button button(String label, int color, int fg, int size, Runnable action) {
         Button b = new Button(this); b.setText(label); b.setTextSize(size); b.setTextColor(fg); b.setAllCaps(false);
-        b.setMinWidth(0); b.setMinimumWidth(0); b.setMinHeight(0); b.setMinimumHeight(0); b.setPadding(dp(3), 0, dp(3), 0); b.setBackground(shape(color, 8)); b.setOnClickListener(v -> action.run()); return b;
+        b.setMinWidth(0); b.setMinimumWidth(0); b.setMinHeight(0); b.setMinimumHeight(0); b.setPadding(dp(3), 0, dp(3), 0); b.setBackground(shape(color, 8)); b.setOnClickListener(v -> action.run());
+        if (label.equals("⌫") || label.equals("刪除")) enableRepeatDelete(b);
+        return b;
+    }
+    private void enableRepeatDelete(Button target) {
+        final boolean[] held = {false}, repeated = {false};
+        final Runnable[] repeat = new Runnable[1];
+        repeat[0] = () -> { if (held[0]) { repeated[0] = true; backspace(false); mainHandler.postDelayed(repeat[0], 65); } };
+        target.setOnTouchListener((view, event) -> {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) { held[0] = true; repeated[0] = false; mainHandler.postDelayed(repeat[0], 380); return true; }
+            if (action == MotionEvent.ACTION_UP) {
+                held[0] = false; mainHandler.removeCallbacks(repeat[0]);
+                if (repeated[0]) rebuild(); else backspace(); return true;
+            }
+            if (action == MotionEvent.ACTION_CANCEL) { held[0] = false; mainHandler.removeCallbacks(repeat[0]); if (repeated[0]) rebuild(); return true; }
+            return true;
+        });
     }
     private LinearLayout row() { LinearLayout r = new LinearLayout(this); r.setOrientation(LinearLayout.HORIZONTAL); r.setGravity(Gravity.CENTER); r.setPadding(dp(2), dp(2), dp(2), dp(2)); return r; }
     private void rebuild() { if (root == null) return; View v = buildView(); setInputView(v); applyImeWindowHeight(); if (scanning) startInlineCamera(); }
@@ -275,9 +298,12 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
         composition = ""; rebuild();
     }
     private void backspace() {
+        backspace(true);
+    }
+    private void backspace(boolean refresh) {
         if (!composition.isEmpty()) composition = composition.substring(0, composition.length() - 1);
         else { InputConnection ic = getCurrentInputConnection(); if (ic != null) ic.deleteSurroundingText(1, 0); }
-        rebuild();
+        if (refresh) rebuild();
     }
 
     private void requestScanner() {
@@ -333,7 +359,18 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
     private void deliverScan(String value) {
         String output = value;
         if (outputProductName && !textScan) { String name = ProductCatalog.nameFor(this, value); if (!name.isEmpty()) output = name; else Toast.makeText(this, "找不到此條碼的商品資料，已輸入條碼", Toast.LENGTH_SHORT).show(); }
-        composition = ""; commit(output); closeScanner();
+        composition = ""; commitReplacingPreviousScan(output); closeScanner();
+    }
+    private void commitReplacingPreviousScan(String value) {
+        InputConnection ic = getCurrentInputConnection(); if (ic == null) return;
+        ic.beginBatchEdit();
+        try {
+            if (lastScannedText != null && !lastScannedText.isEmpty()) {
+                CharSequence before = ic.getTextBeforeCursor(lastScannedText.length(), 0);
+                if (before != null && before.toString().equals(lastScannedText)) ic.deleteSurroundingText(lastScannedText.length(), 0);
+            }
+            ic.commitText(value, 1); lastScannedText = value;
+        } finally { ic.endBatchEdit(); }
     }
     private void stopCamera() { try { if (cameraProvider != null) cameraProvider.unbindAll(); } catch (Exception ignored) { } previewView = null; imageAnalysis = null; previewStage = null; }
 }

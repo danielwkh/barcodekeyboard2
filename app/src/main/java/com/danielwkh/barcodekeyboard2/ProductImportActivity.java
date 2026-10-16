@@ -20,7 +20,7 @@ public class ProductImportActivity extends Activity {
         super.onCreate(state);
         LinearLayout page = new LinearLayout(this); page.setOrientation(LinearLayout.VERTICAL); page.setPadding(dp(22), dp(24), dp(22), dp(22)); page.setBackgroundColor(0xFFF6F7F8);
         TextView title = new TextView(this); title.setText("匯入商品資料"); title.setTextSize(23); title.setTextColor(0xFF18212B); title.setGravity(Gravity.CENTER_VERTICAL); page.addView(title);
-        TextView guide = new TextView(this); guide.setText("選取本機 XLSX 活頁簿。第一列需包含條碼及商品名稱欄位，例如：\n\nBarcode | Product Name\n或\n條碼 | 商品名稱\n\n資料只儲存在此裝置。掃描鍵盤可切換輸出條碼或商品名稱。"); guide.setTextSize(16); guide.setTextColor(0xFF4E5965); guide.setPadding(0, dp(14), 0, dp(14)); page.addView(guide);
+        TextView guide = new TextView(this); guide.setText("選取本機 XLSX 活頁簿。已按你的範本支援第一張「商品」工作表：\n\n名稱 | 條碼 | 第二條碼\n\n主條碼及第二條碼都會對應同一商品名稱；第二張「店鋪庫位」不會匯入。原始 XLSX 只在本次讀取，不會複製或放進 APK。商品對照只儲存在本機。掃描鍵盤可切換輸出條碼或商品名稱。"); guide.setTextSize(16); guide.setTextColor(0xFF4E5965); guide.setPadding(0, dp(14), 0, dp(14)); page.addView(guide);
         status = new TextView(this); status.setTextSize(15); status.setTextColor(0xFF087F47); status.setText("已匯入商品：" + ProductCatalog.count(this) + " 筆"); status.setPadding(0, dp(10), 0, dp(18)); page.addView(status);
         Button pick = new Button(this); pick.setText("選取 XLSX 檔案"); pick.setAllCaps(false); pick.setBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF07C160)); pick.setTextColor(Color.WHITE); page.addView(pick, new LinearLayout.LayoutParams(-1, dp(50))); pick.setOnClickListener(v -> pickFile());
         Button done = new Button(this); done.setText("完成"); done.setAllCaps(false); page.addView(done); done.setOnClickListener(v -> finish());
