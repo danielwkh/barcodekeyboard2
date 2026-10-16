@@ -19,6 +19,9 @@ import java.util.concurrent.Executors;
 /** Offline candidate indexes built from the bundled Rime text dictionaries. */
 final class ChineseInputEngine {
     enum Mode { ENGLISH, PINYIN, STROKE, QUICK }
+    private static final String[] ENGLISH_COMMON = {
+        "the","to","and","a","of","in","is","you","that","it","for","on","with","as","be","this","have","are","at","or","not","but","from","by","my","we","your","all","can","will","do","if","one","about","up","out","what","who","when","which","there","their","would","so","no","has","was","were","they","he","she","her","his","them","me","us","our","time","people","know","get","like","just","good","more","new","now","see","make","use","how","want","need","go","come","think","look","back","after","work","first","well","way","even","because","day","man","woman","life","right","very","through","where","much","should","still","own","same","another","around","while","help","please","thank","thanks","hello","yes","today","name","home","product","price","item","code","scan","search","enter"
+    };
     private static final String COMMON = "的一是不了在人有我他這中大來上國個到說們為子和你地出道也時年得就那要下以生會自着去之過家學對可她里後小麼心多天而能好都然沒日於起還發成事只作當想看文無開手十用主行方又如前所本見經頭面公同三已老從動兩長知民樣現分將外但身些與高意進把法此實回二理美點月明其種正關問力它相高次好道區今經定化義使說直電備者制表水行社數記求結解政任認報調資夜則呢發更幾處放花很當省間候門立不再見色體聲城場業系通真建可廠特金品即動產葉職後臺熱難氣個爾條風辦隊應費業";
     private final Context app;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -68,6 +71,12 @@ final class ChineseInputEngine {
     }
 
     synchronized List<String> candidates(Mode mode, String code) {
+        if (mode == Mode.ENGLISH) {
+            List<String> words = new ArrayList<>(); String prefix = code == null ? "" : code.toLowerCase(Locale.ROOT);
+            if (prefix.isEmpty()) return words;
+            for (String word : ENGLISH_COMMON) if (word.startsWith(prefix)) { words.add(word); if (words.size() == 8) break; }
+            return words;
+        }
         Map<String, List<String>> index = indexes.get(mode);
         if (index == null || code == null || code.isEmpty()) return new ArrayList<>();
         List<String> values = index.get(code.toLowerCase(Locale.ROOT));
