@@ -25,6 +25,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
+import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
@@ -323,7 +324,7 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
         root.addView(toolbar, new LinearLayout.LayoutParams(-1, dp(36)));
         previewStage = new FrameLayout(this); previewView = new PreviewView(this); previewView.setImplementationMode(PreviewView.ImplementationMode.COMPATIBLE);
         previewStage.addView(previewView, new FrameLayout.LayoutParams(-1, -1));
-        TextView hint = text(textScan ? "將文字置於鏡頭中" : "將 QR Code／條碼置於鏡頭中", 12, Color.WHITE); hint.setBackgroundColor(0x88000000); hint.setPadding(dp(8), dp(4), dp(8), dp(4));
+        TextView hint = text(textScan ? "將文字置於鏡頭中" : "將條碼置中；難辨識時會讀取下方數字", 12, Color.WHITE); hint.setBackgroundColor(0x88000000); hint.setPadding(dp(8), dp(4), dp(8), dp(4));
         FrameLayout.LayoutParams hp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL); hp.bottomMargin = dp(8); previewStage.addView(hint, hp);
         root.addView(previewStage, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout bottom = row(); bottom.addView(button("取消掃描", 0xFFD5D9DE, 0xFF202124, 12, this::closeScanner), new LinearLayout.LayoutParams(0, dp(32), 1));
@@ -343,14 +344,21 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
                     if (scanHandled.get()) { proxy.close(); return; }
                     android.media.Image media = proxy.getImage(); if (media == null) { proxy.close(); return; }
                     InputImage image = InputImage.fromMediaImage(media, proxy.getImageInfo().getRotationDegrees());
-                    com.google.android.gms.tasks.Task<?> task;
-                    if (textScan) task = textRecognizer.process(image).addOnSuccessListener(result -> {
-                        String value = result.getText().trim(); if (!value.isEmpty() && scanHandled.compareAndSet(false, true)) mainHandler.post(() -> deliverScan(value));
-                    });
-                    else task = barcodeScanner.process(image).addOnSuccessListener(codes -> {
-                        for (Barcode code : codes) { String value = code.getRawValue(); if (value != null && !value.isEmpty() && scanHandled.compareAndSet(false, true)) { mainHandler.post(() -> deliverScan(value)); break; } }
-                    });
-                    task.addOnCompleteListener(done -> proxy.close());
+                    if (textScan) {
+                        textRecognizer.process(image).addOnSuccessListener(result -> {
+                            String value = result.getText().trim(); if (!value.isEmpty() && scanHandled.compareAndSet(false, true)) mainHandler.post(() -> deliverScan(value));
+                        }).addOnCompleteListener(done -> proxy.close());
+                    } else {
+                        barcodeScanner.process(image).addOnSuccessListener(codes -> {
+                            String decoded = null;
+                            for (Barcode code : codes) { String value = code.getRawValue(); if (value != null && !value.trim().isEmpty()) { decoded = value.trim(); break; } }
+                            if (decoded != null) {
+                                String value = decoded;
+                                if (scanHandled.compareAndSet(false, true)) mainHandler.post(() -> deliverScan(value));
+                                proxy.close();
+                            } else scanDigitsWithOcr(image, proxy);
+                        }).addOnFailureListener(error -> scanDigitsWithOcr(image, proxy));
+                    }
                 });
                 cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis);
             } catch (Exception e) { Toast.makeText(this, "無法啟動相機", Toast.LENGTH_SHORT).show(); closeScanner(); }
@@ -362,6 +370,27 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
         if (outputProductName && !textScan) { String name = ProductCatalog.nameFor(this, value); if (!name.isEmpty()) output = name; else Toast.makeText(this, "找不到此條碼的商品資料，已輸入條碼", Toast.LENGTH_SHORT).show(); }
         composition = ""; commitReplacingPreviousScan(output); closeScanner();
         if (barcodeScan) enter();
+    }
+    private void scanDigitsWithOcr(InputImage image, ImageProxy proxy) {
+        if (scanHandled.get()) { proxy.close(); return; }
+        textRecognizer.process(image).addOnSuccessListener(result -> {
+            String digits = bestPrintedDigits(result);
+            if (digits != null && scanHandled.compareAndSet(false, true)) mainHandler.post(() -> deliverScan(digits));
+        }).addOnCompleteListener(done -> proxy.close());
+    }
+    private String bestPrintedDigits(com.google.mlkit.vision.text.Text text) {
+        String best = null;
+        for (com.google.mlkit.vision.text.Text.TextBlock block : text.getTextBlocks()) {
+            for (com.google.mlkit.vision.text.Text.Line line : block.getLines()) {
+                String raw = line.getText().trim();
+                // 只接受印刷碼常見的純數字／空格／連字號，避免從品名或價錢文字抽取數字。
+                if (!raw.matches("[0-9][0-9\\s-]*")) continue;
+                String digits = raw.replaceAll("[\\s-]", "");
+                if (digits.length() < 5 || digits.length() > 18) continue;
+                if (best == null || digits.length() > best.length()) best = digits;
+            }
+        }
+        return best;
     }
     private void commitReplacingPreviousScan(String value) {
         InputConnection ic = getCurrentInputConnection(); if (ic == null) return;
