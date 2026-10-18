@@ -8,8 +8,8 @@ android {
         applicationId = "com.danielwkh.barcodekeyboard2"
         minSdk = 23
         targetSdk = 35
-        versionCode = 7
-        versionName = "1.4.0"
+        versionCode = 8
+        versionName = "1.4.1"
     }
 }
 
