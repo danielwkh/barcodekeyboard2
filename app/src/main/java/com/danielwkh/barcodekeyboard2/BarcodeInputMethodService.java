@@ -3,6 +3,8 @@ package com.danielwkh.barcodekeyboard2;
 import android.Manifest;
 import android.app.Dialog;
 import android.content.Intent;
+import android.content.ClipboardManager;
+import android.content.ClipData;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -18,11 +20,16 @@ import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.app.AlertDialog;
+import android.view.KeyEvent;
+import android.view.SoundEffectConstants;
+import android.view.HapticFeedbackConstants;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
@@ -43,6 +50,7 @@ import com.google.mlkit.vision.text.TextRecognizer;
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions;
 import java.util.List;
 import java.util.Locale;
+import org.json.JSONArray;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -63,6 +71,8 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
     private boolean outputProductName = false;
     private boolean shifted = false;
     private boolean numericMode = false;
+    private boolean nineKeyMode = false;
+    private String toolPage;
     private String lastScannedText;
     private ProcessCameraProvider cameraProvider;
     private ImageAnalysis imageAnalysis;
@@ -121,7 +131,12 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
     private TextView text(String value, int size, int color) { TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(color); t.setGravity(Gravity.CENTER); return t; }
     private Button button(String label, int color, int fg, int size, Runnable action) {
         Button b = new Button(this); b.setText(label); b.setTextSize(size); b.setTextColor(fg); b.setAllCaps(false);
-        b.setMinWidth(0); b.setMinimumWidth(0); b.setMinHeight(0); b.setMinimumHeight(0); b.setPadding(dp(3), 0, dp(3), 0); b.setBackground(shape(color, 8)); b.setOnClickListener(v -> action.run());
+        b.setMinWidth(0); b.setMinimumWidth(0); b.setMinHeight(0); b.setMinimumHeight(0); b.setPadding(dp(3), 0, dp(3), 0); b.setBackground(shape(color, 8)); b.setOnClickListener(v -> {
+            android.content.SharedPreferences prefs = getSharedPreferences("keyboard_settings", MODE_PRIVATE);
+            if (prefs.getBoolean("haptics", false)) v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+            if (prefs.getBoolean("key_sound", false)) v.playSoundEffect(SoundEffectConstants.CLICK);
+            action.run();
+        });
         if (label.equals("⌫") || label.equals("刪除")) enableRepeatDelete(b);
         return b;
     }
@@ -146,26 +161,31 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(5), dp(3), dp(5), dp(4));
         root.setBackgroundColor(mode == ChineseInputEngine.Mode.STROKE && !scanning ? 0xFF202124 : 0xFFE9EDF2);
         root.setLayoutParams(new ViewGroup.LayoutParams(-1, dp(KEYBOARD_HEIGHT_DP)));
-        if (scanning) buildScanner(); else buildKeyboard(); return root;
+        if (scanning) buildScanner(); else if (toolPage != null) buildToolPanel(); else buildKeyboard(); return root;
     }
     private void buildKeyboard() {
         LinearLayout toolbar = row(); toolbar.setGravity(Gravity.CENTER_VERTICAL); toolbar.setPadding(dp(3), 0, dp(3), dp(2));
+        toolbar.addView(button("☷", 0xFFD7DCE2, 0xFF202124, 19, () -> { toolPage = "tools"; rebuild(); }), new LinearLayout.LayoutParams(dp(40), dp(32)));
         TextView brand = text("Barcode Keyboard", 13, 0xFF59636E); brand.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
         toolbar.addView(brand, new LinearLayout.LayoutParams(0, dp(34), 1));
-        toolbar.addView(button("▦ 掃描", 0xFF07C160, Color.WHITE, 13, this::requestScanner), new LinearLayout.LayoutParams(dp(82), dp(32)));
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(54), dp(32)); p.setMargins(dp(5), 0, 0, 0);
+        toolbar.addView(button("▦ 掃碼", 0xFF07C160, Color.WHITE, 13, this::requestScanner), new LinearLayout.LayoutParams(dp(74), dp(32)));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(50), dp(32)); p.setMargins(dp(5), 0, 0, 0);
         toolbar.addView(button("商品", 0xFFD7DCE2, 0xFF202124, 12, this::openProductImport), p);
         root.addView(toolbar, new LinearLayout.LayoutParams(-1, dp(36)));
 
         HorizontalScrollView modeScroll = new HorizontalScrollView(this); modeScroll.setHorizontalScrollBarEnabled(false); LinearLayout tabs = row();
-        addMode(tabs, "EN", ChineseInputEngine.Mode.ENGLISH, 46); addMode(tabs, "拼音", ChineseInputEngine.Mode.PINYIN, 58);
+        addMode(tabs, "EN", ChineseInputEngine.Mode.ENGLISH, 42);
+        Button nine = button(nineKeyMode ? "九宮格✓" : "九宮格", nineKeyMode ? 0xFF07C160 : 0xFFD9DEE4, nineKeyMode ? Color.WHITE : 0xFF26313B, 11, () -> { mode = ChineseInputEngine.Mode.PINYIN; nineKeyMode = true; composition = ""; engine.ensureLoaded(mode, this::rebuild); rebuild(); });
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(dp(68), dp(27)); nlp.setMargins(dp(2), 0, dp(2), 0); tabs.addView(nine, nlp);
+        Button qwerty = button("26鍵", mode == ChineseInputEngine.Mode.PINYIN && !nineKeyMode ? 0xFF07C160 : 0xFFD9DEE4, mode == ChineseInputEngine.Mode.PINYIN && !nineKeyMode ? Color.WHITE : 0xFF26313B, 11, () -> { mode = ChineseInputEngine.Mode.PINYIN; nineKeyMode = false; engine.ensureLoaded(mode, this::rebuild); rebuild(); });
+        LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(dp(48), dp(27)); qlp.setMargins(dp(2), 0, dp(2), 0); tabs.addView(qwerty, qlp);
         addMode(tabs, "筆畫", ChineseInputEngine.Mode.STROKE, 58); addMode(tabs, "速成", ChineseInputEngine.Mode.QUICK, 58);
         modeScroll.addView(tabs); root.addView(modeScroll, new LinearLayout.LayoutParams(-1, dp(32)));
 
         HorizontalScrollView choices = new HorizontalScrollView(this); choices.setHorizontalScrollBarEnabled(false); LinearLayout choiceRow = row();
         if (!composition.isEmpty()) {
             TextView composing = text(composition, 13, mode == ChineseInputEngine.Mode.STROKE ? 0xFFE9EDF2 : 0xFF5D6670); choiceRow.addView(composing, new LinearLayout.LayoutParams(dp(48), dp(29)));
-            List<String> candidates = engine.candidates(mode, composition);
+            List<String> candidates = mode == ChineseInputEngine.Mode.PINYIN && nineKeyMode ? engine.candidatesT9(composition) : engine.candidates(mode, composition);
             for (int i = 0; i < candidates.size(); i++) {
                 final String candidate = candidates.get(i); Button item = button((i + 1) + " " + candidate, Color.WHITE, 0xFF18212B, 15, () -> selectCandidate(candidate));
                 LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, dp(29)); clp.setMargins(dp(2), 0, dp(2), 0); choiceRow.addView(item, clp);
@@ -176,8 +196,108 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
             choiceRow.addView(text(tip, 12, mode == ChineseInputEngine.Mode.STROKE ? 0xFFE9EDF2 : 0xFF77818A), new LinearLayout.LayoutParams(-2, dp(29)));
         }
         choices.addView(choiceRow); root.addView(choices, new LinearLayout.LayoutParams(-1, dp(31)));
-        if (mode == ChineseInputEngine.Mode.STROKE && !numericMode) buildStrokeKeys(); else buildLetterKeys();
+        if (mode == ChineseInputEngine.Mode.STROKE && !numericMode) buildStrokeKeys(); else if (mode == ChineseInputEngine.Mode.PINYIN && nineKeyMode && !numericMode) buildNineKey(); else buildLetterKeys();
         View spacer = new View(this); root.addView(spacer, new LinearLayout.LayoutParams(-1, 0, 1));
+    }
+    private void buildToolPanel() {
+        LinearLayout header = row(); header.setGravity(Gravity.CENTER_VERTICAL);
+        header.addView(button("‹", 0xFFD5D9DE, 0xFF202124, 22, () -> { toolPage = null; rebuild(); }), new LinearLayout.LayoutParams(dp(42), dp(32)));
+        String title = "tools".equals(toolPage) ? "快捷工具" : "clipboard".equals(toolPage) ? "剪貼簿（本機）" : "phrases".equals(toolPage) ? "常用語" : "emoji".equals(toolPage) ? "表情" : "cursor".equals(toolPage) ? "游標控制" : "鍵盤設定";
+        header.addView(text(title, 15, 0xFF26313B), new LinearLayout.LayoutParams(0, dp(32), 1));
+        header.addView(button("▦ 掃碼", 0xFF07C160, Color.WHITE, 12, () -> { toolPage = null; requestScanner(); }), new LinearLayout.LayoutParams(dp(72), dp(32)));
+        root.addView(header, new LinearLayout.LayoutParams(-1, dp(38)));
+        if ("tools".equals(toolPage)) {
+            String[][] tools = {{"剪貼簿", "clipboard"}, {"常用語", "phrases"}, {"表情", "emoji"}, {"游標", "cursor"}, {"設定", "settings"}, {"商品資料", "products"}};
+            for (int i = 0; i < tools.length; i += 3) {
+                LinearLayout r = row();
+                for (int j = i; j < Math.min(i + 3, tools.length); j++) {
+                    String page = tools[j][1]; Button b = button(tools[j][0], Color.WHITE, 0xFF25313C, 14, () -> {
+                        if (page.equals("products")) { toolPage = null; openProductImport(); } else { toolPage = page; rebuild(); }
+                    });
+                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(54), 1); lp.setMargins(dp(3), dp(2), dp(3), dp(2)); r.addView(b, lp);
+                }
+                root.addView(r, new LinearLayout.LayoutParams(-1, dp(58)));
+            }
+            root.addView(text("本機快捷工具；商品掃描仍可隨時使用", 11, 0xFF75808B), new LinearLayout.LayoutParams(-1, dp(24)));
+        } else if ("clipboard".equals(toolPage)) buildClipboardPanel();
+        else if ("phrases".equals(toolPage)) buildPhrasesPanel();
+        else if ("emoji".equals(toolPage)) buildEmojiPanel();
+        else if ("cursor".equals(toolPage)) buildCursorPanel();
+        else buildSettingsPanel();
+    }
+    private JSONArray toolArray(String key) {
+        try { return new JSONArray(getSharedPreferences("keyboard_tools", MODE_PRIVATE).getString(key, "[]")); }
+        catch (Exception e) { return new JSONArray(); }
+    }
+    private void buildClipboardPanel() {
+        LinearLayout actions = row();
+        actions.addView(button("讀取目前剪貼簿", 0xFF07C160, Color.WHITE, 13, this::saveCurrentClipboard), new LinearLayout.LayoutParams(0, dp(34), 1));
+        actions.addView(button("清空", 0xFFD5D9DE, 0xFF202124, 12, () -> { getSharedPreferences("keyboard_tools", MODE_PRIVATE).edit().putString("clipboard", "[]").apply(); rebuild(); }), new LinearLayout.LayoutParams(dp(62), dp(34)));
+        root.addView(actions, new LinearLayout.LayoutParams(-1, dp(38)));
+        JSONArray history = toolArray("clipboard");
+        if (history.length() == 0) root.addView(text("點按上方按鈕後，複製文字會保存在本機。", 12, 0xFF727D88), new LinearLayout.LayoutParams(-1, dp(40)));
+        for (int i = 0; i < Math.min(history.length(), 4); i++) {
+            String value = history.optString(i, ""); if (value.isEmpty()) continue;
+            Button item = button(value, Color.WHITE, 0xFF202124, 12, () -> { commit(value); toolPage = null; rebuild(); }); item.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+            root.addView(item, new LinearLayout.LayoutParams(-1, dp(36)));
+        }
+    }
+    private void saveCurrentClipboard() {
+        ClipboardManager manager = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        if (manager == null || !manager.hasPrimaryClip()) { Toast.makeText(this, "剪貼簿沒有文字", Toast.LENGTH_SHORT).show(); return; }
+        ClipData clip = manager.getPrimaryClip(); if (clip == null || clip.getItemCount() == 0) return;
+        CharSequence text = clip.getItemAt(0).coerceToText(this); if (text == null || text.toString().trim().isEmpty()) return;
+        String value = text.toString().trim(); JSONArray old = toolArray("clipboard"), next = new JSONArray(); next.put(value);
+        for (int i = 0; i < old.length() && next.length() < 20; i++) { String v = old.optString(i, ""); if (!v.equals(value)) next.put(v); }
+        getSharedPreferences("keyboard_tools", MODE_PRIVATE).edit().putString("clipboard", next.toString()).apply(); rebuild();
+    }
+    private void buildPhrasesPanel() {
+        root.addView(button("＋ 新增常用語", 0xFF07C160, Color.WHITE, 14, this::addPhrase), new LinearLayout.LayoutParams(-1, dp(36)));
+        JSONArray phrases = toolArray("phrases");
+        if (phrases.length() == 0) root.addView(text("點按輸入；長按項目可刪除。", 12, 0xFF727D88), new LinearLayout.LayoutParams(-1, dp(32)));
+        for (int i = 0; i < Math.min(phrases.length(), 5); i++) {
+            String value = phrases.optString(i, ""); if (value.isEmpty()) continue;
+            Button item = button(value, Color.WHITE, 0xFF202124, 12, () -> { commit(value); toolPage = null; rebuild(); }); item.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+            item.setOnLongClickListener(v -> { new AlertDialog.Builder(this).setMessage("刪除此常用語？").setNegativeButton("取消", null).setPositiveButton("刪除", (d,w) -> removePhrase(value)).show(); return true; });
+            root.addView(item, new LinearLayout.LayoutParams(-1, dp(33)));
+        }
+    }
+    private void addPhrase() {
+        EditText input = new EditText(this); input.setHint("輸入要保存的文字");
+        new AlertDialog.Builder(this).setTitle("新增常用語").setView(input).setNegativeButton("取消", null).setPositiveButton("保存", (d,w) -> {
+            String value = input.getText().toString().trim(); if (!value.isEmpty()) { JSONArray a = toolArray("phrases"); a.put(value); getSharedPreferences("keyboard_tools", MODE_PRIVATE).edit().putString("phrases", a.toString()).apply(); rebuild(); }
+        }).show();
+    }
+    private void removePhrase(String remove) {
+        JSONArray old = toolArray("phrases"), next = new JSONArray();
+        for (int i = 0; i < old.length(); i++) { String value = old.optString(i, ""); if (!value.equals(remove)) next.put(value); }
+        getSharedPreferences("keyboard_tools", MODE_PRIVATE).edit().putString("phrases", next.toString()).apply(); rebuild();
+    }
+    private void buildEmojiPanel() {
+        String[] emojis = {"😀","😁","😂","🤣","😊","😍","🥰","😘","😎","😭","😅","🙏","👍","👏","❤️","💯","🎉","✨","🔥","✅","❌","🙂","😉","🤔"};
+        for (int i = 0; i < emojis.length; i += 6) {
+            LinearLayout r = row(); for (int j = i; j < Math.min(i + 6, emojis.length); j++) {
+                String value = emojis[j]; r.addView(button(value, Color.WHITE, 0xFF202124, 22, () -> { commit(value); toolPage = null; rebuild(); }), new LinearLayout.LayoutParams(0, dp(42), 1));
+            } root.addView(r, new LinearLayout.LayoutParams(-1, dp(45)));
+        }
+    }
+    private void buildCursorPanel() {
+        LinearLayout r = row();
+        r.addView(button("◀", Color.WHITE, 0xFF202124, 20, () -> moveCursor(KeyEvent.KEYCODE_DPAD_LEFT, false)), new LinearLayout.LayoutParams(0, dp(52), 1));
+        r.addView(button("▶", Color.WHITE, 0xFF202124, 20, () -> moveCursor(KeyEvent.KEYCODE_DPAD_RIGHT, false)), new LinearLayout.LayoutParams(0, dp(52), 1));
+        r.addView(button("選左", 0xFFD5D9DE, 0xFF202124, 12, () -> moveCursor(KeyEvent.KEYCODE_DPAD_LEFT, true)), new LinearLayout.LayoutParams(0, dp(52), 1));
+        r.addView(button("選右", 0xFFD5D9DE, 0xFF202124, 12, () -> moveCursor(KeyEvent.KEYCODE_DPAD_RIGHT, true)), new LinearLayout.LayoutParams(0, dp(52), 1));
+        root.addView(r, new LinearLayout.LayoutParams(-1, dp(58)));
+    }
+    private void moveCursor(int keyCode, boolean select) {
+        InputConnection ic = getCurrentInputConnection(); if (ic == null) return; int meta = select ? KeyEvent.META_SHIFT_ON : 0;
+        ic.sendKeyEvent(new KeyEvent(0,0,KeyEvent.ACTION_DOWN,keyCode,0,meta)); ic.sendKeyEvent(new KeyEvent(0,0,KeyEvent.ACTION_UP,keyCode,0,meta));
+    }
+    private void buildSettingsPanel() {
+        android.content.SharedPreferences prefs = getSharedPreferences("keyboard_settings", MODE_PRIVATE);
+        root.addView(button("觸感回饋：" + (prefs.getBoolean("haptics", false) ? "開" : "關"), Color.WHITE, 0xFF202124, 14, () -> { prefs.edit().putBoolean("haptics", !prefs.getBoolean("haptics", false)).apply(); rebuild(); }), new LinearLayout.LayoutParams(-1, dp(42)));
+        root.addView(button("按鍵聲音：" + (prefs.getBoolean("key_sound", false) ? "開" : "關"), Color.WHITE, 0xFF202124, 14, () -> { prefs.edit().putBoolean("key_sound", !prefs.getBoolean("key_sound", false)).apply(); rebuild(); }), new LinearLayout.LayoutParams(-1, dp(42)));
+        root.addView(text("鍵盤與掃描面板維持相同高度。", 12, 0xFF727D88), new LinearLayout.LayoutParams(-1, dp(28)));
     }
     private void addMode(LinearLayout tabs, String label, ChineseInputEngine.Mode selected, int width) {
         int bg = mode == selected ? 0xFF07C160 : 0xFFD9DEE4; int fg = mode == selected ? Color.WHITE : 0xFF26313B;
@@ -216,6 +336,24 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
         }
         root.addView(r, new LinearLayout.LayoutParams(-1, dp(KEY_ROW_HEIGHT_DP)));
     }
+    private void buildNineKey() {
+        String[][] rows = {{"1\n符號", "2\nABC", "3\nDEF"}, {"4\nGHI", "5\nJKL", "6\nMNO"}, {"7\nPQRS", "8\nTUV", "9\nWXYZ"}};
+        for (String[] labels : rows) {
+            LinearLayout r = row();
+            for (String label : labels) {
+                String digit = label.substring(0, 1);
+                Button b = button(label, Color.WHITE, 0xFF202124, 17, () -> { if (digit.equals("1")) commit("1"); else { composition += digit; rebuild(); } });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(46), 1); lp.setMargins(dp(4), dp(2), dp(4), dp(2)); r.addView(b, lp);
+            }
+            root.addView(r, new LinearLayout.LayoutParams(-1, dp(KEY_ROW_HEIGHT_DP)));
+        }
+        LinearLayout bottom = row();
+        bottom.addView(button("⌫", 0xFFD5D9DE, 0xFF202124, 18, this::backspace), new LinearLayout.LayoutParams(0, dp(46), 1));
+        bottom.addView(button(",", Color.WHITE, 0xFF202124, 17, () -> punctuation(",")), new LinearLayout.LayoutParams(0, dp(46), 0.8f));
+        bottom.addView(button("空格／選字", Color.WHITE, 0xFF202124, 12, this::space), new LinearLayout.LayoutParams(0, dp(46), 1.8f));
+        bottom.addView(enterButton(0), new LinearLayout.LayoutParams(0, dp(46), 1.3f));
+        root.addView(bottom, new LinearLayout.LayoutParams(-1, dp(KEY_ROW_HEIGHT_DP)));
+    }
     private void buildStrokeKeys() {
         addStrokeGridRow(new String[][]{{"一","h"},{"丨","s"},{"丿","p"},{"⌫","back"}});
         addStrokeGridRow(new String[][]{{"丶","n"},{"乙","z"},{"清除","clear"},{"換行","enter"}});
@@ -234,6 +372,7 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
             int bg = action ? (key[0].equals("換行") ? 0xFF414141 : 0xFF414141) : 0xFF5D5D5D;
             int size = key[0].length() > 1 ? 17 : 31;
             Button b = button(key[0], bg, Color.WHITE, size, () -> strokeAction(key[1]));
+            if (key[0].equals("⌫")) enableRepeatDelete(b);
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(46), 1); lp.setMargins(dp(4), dp(3), dp(4), dp(3)); r.addView(b, lp);
         }
         root.addView(r, new LinearLayout.LayoutParams(-1, dp(KEY_ROW_HEIGHT_DP)));
@@ -257,6 +396,7 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
     private void typeKey(String key) {
         if (key.equals("⇧")) return; if (key.equals("⌫")) { backspace(); return; }
         if (numericMode) { commit(key); return; }
+        if (mode == ChineseInputEngine.Mode.PINYIN && nineKeyMode && key.matches("[2-9]")) { composition += key; engine.ensureLoaded(mode, this::rebuild); rebuild(); return; }
         if (mode == ChineseInputEngine.Mode.ENGLISH) {
             if (key.matches("[a-zA-Z]")) { composition += shifted ? key.toUpperCase(Locale.ROOT) : key.toLowerCase(Locale.ROOT); shifted = false; rebuild(); }
             else commit(key); return;
@@ -268,6 +408,9 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
         if ((mode == ChineseInputEngine.Mode.PINYIN || mode == ChineseInputEngine.Mode.QUICK) && !key.matches("[a-z]")) return;
         composition += key; engine.ensureLoaded(mode, this::rebuild); rebuild();
     }
+    private List<String> currentCandidates() {
+        return mode == ChineseInputEngine.Mode.PINYIN && nineKeyMode ? engine.candidatesT9(composition) : engine.candidates(mode, composition);
+    }
     private void selectCandidate(String value) {
         String output = value;
         if (mode == ChineseInputEngine.Mode.ENGLISH && !composition.isEmpty() && Character.isUpperCase(composition.charAt(0))) output = value.substring(0, 1).toUpperCase(Locale.ROOT) + value.substring(1);
@@ -277,14 +420,14 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
     private void flushComposition(boolean chooseChineseCandidate) {
         if (composition.isEmpty()) return;
         if (chooseChineseCandidate && mode != ChineseInputEngine.Mode.ENGLISH) {
-            List<String> candidates = engine.candidates(mode, composition); if (!candidates.isEmpty()) { commit(candidates.get(0)); composition = ""; return; }
+            List<String> candidates = currentCandidates(); if (!candidates.isEmpty()) { commit(candidates.get(0)); composition = ""; return; }
         }
         commit(composition); composition = "";
     }
     private void space() {
         if (mode == ChineseInputEngine.Mode.ENGLISH) { flushComposition(false); commit(" "); rebuild(); return; }
         if (!composition.isEmpty()) {
-            List<String> candidates = engine.candidates(mode, composition);
+            List<String> candidates = currentCandidates();
             if (!candidates.isEmpty()) commit(candidates.get(0)); else { commit(composition); commit(" "); }
             composition = ""; rebuild(); return;
         }

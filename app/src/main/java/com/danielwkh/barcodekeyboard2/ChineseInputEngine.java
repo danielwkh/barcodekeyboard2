@@ -87,6 +87,32 @@ final class ChineseInputEngine {
         return new ArrayList<>(combined);
     }
 
+    synchronized List<String> candidatesT9(String digits) {
+        List<String> result = new ArrayList<>();
+        Map<String, List<String>> index = indexes.get(Mode.PINYIN);
+        if (index == null || digits == null || digits.isEmpty()) return result;
+        LinkedHashSet<String> pool = new LinkedHashSet<>();
+        for (Map.Entry<String, List<String>> entry : index.entrySet()) {
+            String code = entry.getKey();
+            if (code.isEmpty() || code.length() < digits.length()) continue;
+            boolean matches = true;
+            for (int i = 0; i < digits.length(); i++) if (t9Digit(code.charAt(i)) != digits.charAt(i)) { matches = false; break; }
+            if (matches) for (String candidate : entry.getValue()) { pool.add(candidate); if (pool.size() >= 1000) break; }
+            if (pool.size() >= 1000) break;
+        }
+        List<String> ranked = new ArrayList<>(pool); ranked.sort(Comparator.comparingInt(ChineseInputEngine::priority));
+        result.addAll(ranked.subList(0, Math.min(8, ranked.size())));
+        return result;
+    }
+
+    private static char t9Digit(char letter) {
+        if ("abc".indexOf(letter) >= 0) return '2'; if ("def".indexOf(letter) >= 0) return '3';
+        if ("ghi".indexOf(letter) >= 0) return '4'; if ("jkl".indexOf(letter) >= 0) return '5';
+        if ("mno".indexOf(letter) >= 0) return '6'; if ("pqrs".indexOf(letter) >= 0) return '7';
+        if ("tuv".indexOf(letter) >= 0) return '8'; if ("wxyz".indexOf(letter) >= 0) return '9';
+        return '0';
+    }
+
     private void composePinyin(Map<String, List<String>> index, String input, int offset, StringBuilder prefix, LinkedHashSet<String> out, int depth) {
         if (out.size() >= 8 || depth >= 12) return;
         if (offset == input.length()) { if (prefix.length() > 0) out.add(prefix.toString()); return; }
