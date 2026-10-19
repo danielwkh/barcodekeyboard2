@@ -56,7 +56,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class BarcodeInputMethodService extends InputMethodService implements LifecycleOwner {
     private static final int KEYBOARD_HEIGHT_DP = 340;
-    private static final int KEY_ROW_HEIGHT_DP = 50;
+    private static final int KEY_ROW_HEIGHT_DP = 53;
     private static BarcodeInputMethodService active;
     private LifecycleRegistry lifecycle;
     private LinearLayout root;
@@ -126,7 +126,7 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
     private TextView text(String value, int size, int color) { TextView t = new TextView(this); t.setText(value); t.setTextSize(size); t.setTextColor(color); t.setGravity(Gravity.CENTER); return t; }
     private Button button(String label, int color, int fg, int size, Runnable action) {
         Button b = new Button(this); b.setText(label); b.setTextSize(size); b.setTextColor(fg); b.setAllCaps(false);
-        b.setMinWidth(0); b.setMinimumWidth(0); b.setMinHeight(0); b.setMinimumHeight(0); b.setPadding(dp(3), 0, dp(3), 0); b.setBackground(shape(color, 8)); b.setOnClickListener(v -> {
+        b.setMinWidth(0); b.setMinimumWidth(0); b.setMinHeight(0); b.setMinimumHeight(0); b.setPadding(dp(3), 0, dp(3), 0); b.setBackground(shape(color, 11)); b.setStateListAnimator(null); b.setElevation(dp(1.5f)); b.setOnClickListener(v -> {
             android.content.SharedPreferences prefs = getSharedPreferences("keyboard_settings", MODE_PRIVATE);
             if (prefs.getBoolean("haptics", false)) v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
             if (prefs.getBoolean("key_sound", false)) v.playSoundEffect(SoundEffectConstants.CLICK);
@@ -153,23 +153,23 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
     private LinearLayout row() { LinearLayout r = new LinearLayout(this); r.setOrientation(LinearLayout.HORIZONTAL); r.setGravity(Gravity.CENTER); r.setPadding(dp(2), dp(2), dp(2), dp(2)); return r; }
     private void rebuild() { if (root == null) return; View v = buildView(); setInputView(v); applyImeWindowHeight(); if (scanning) startInlineCamera(); }
     private View buildView() {
-        root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(5), dp(3), dp(5), dp(4));
-        root.setBackgroundColor(0xFFE9EDF2);
+        root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(dp(8), dp(6), dp(8), dp(6));
+        root.setBackground(shape(0xFFE8EDF3, 16));
         root.setLayoutParams(new ViewGroup.LayoutParams(-1, dp(KEYBOARD_HEIGHT_DP)));
         if (scanning) buildScanner(); else if (toolPage != null) buildToolPanel(); else buildKeyboard(); return root;
     }
     private void buildKeyboard() {
-        LinearLayout toolbar = row(); toolbar.setGravity(Gravity.CENTER_VERTICAL); toolbar.setPadding(dp(3), 0, dp(3), dp(2));
-        toolbar.addView(button("☷", 0xFFD7DCE2, 0xFF202124, 19, () -> { toolPage = "tools"; rebuild(); }), new LinearLayout.LayoutParams(dp(40), dp(32)));
-        TextView brand = text("Barcode Keyboard", 13, 0xFF59636E); brand.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        toolbar.addView(brand, new LinearLayout.LayoutParams(0, dp(34), 1));
-        toolbar.addView(button("▦ 掃碼", 0xFF07C160, Color.WHITE, 13, this::requestScanner), new LinearLayout.LayoutParams(dp(74), dp(32)));
-        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(50), dp(32)); p.setMargins(dp(5), 0, 0, 0);
+        LinearLayout toolbar = row(); toolbar.setGravity(Gravity.CENTER_VERTICAL); toolbar.setPadding(dp(4), dp(3), dp(4), dp(3)); toolbar.setBackground(shape(0xFFF7F9FC, 15));
+        toolbar.addView(button("☰", 0xFFE8EDF3, 0xFF334155, 18, () -> { toolPage = "tools"; rebuild(); }), new LinearLayout.LayoutParams(dp(42), dp(36)));
+        TextView brand = text("Barcode  ·  EN", 14, 0xFF334155); brand.setTypeface(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD); brand.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+        toolbar.addView(brand, new LinearLayout.LayoutParams(0, dp(36), 1));
+        toolbar.addView(button("▦  掃描", 0xFF08A85B, Color.WHITE, 13, this::requestScanner), new LinearLayout.LayoutParams(dp(82), dp(36)));
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(dp(54), dp(36)); p.setMargins(dp(5), 0, 0, 0);
         toolbar.addView(button("商品", 0xFFD7DCE2, 0xFF202124, 12, this::openProductImport), p);
         root.addView(toolbar, new LinearLayout.LayoutParams(-1, dp(36)));
 
-        TextView englishLabel = text("英文直輸", 12, 0xFF77818A); englishLabel.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-        root.addView(englishLabel, new LinearLayout.LayoutParams(-1, dp(28)));
+        TextView englishLabel = text("ENGLISH     •     直接輸入，不顯示候選", 11, 0xFF718096); englishLabel.setGravity(Gravity.CENTER_VERTICAL | Gravity.START); englishLabel.setPadding(dp(5), 0, 0, 0);
+        root.addView(englishLabel, new LinearLayout.LayoutParams(-1, dp(25)));
         buildLetterKeys();
         View spacer = new View(this); root.addView(spacer, new LinearLayout.LayoutParams(-1, 0, 1));
     }
@@ -181,12 +181,14 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
         header.addView(button("▦ 掃碼", 0xFF07C160, Color.WHITE, 12, () -> { toolPage = null; requestScanner(); }), new LinearLayout.LayoutParams(dp(72), dp(32)));
         root.addView(header, new LinearLayout.LayoutParams(-1, dp(38)));
         if ("tools".equals(toolPage)) {
-            String[][] tools = {{"剪貼簿", "clipboard"}, {"常用語", "phrases"}, {"表情", "emoji"}, {"游標", "cursor"}, {"設定", "settings"}, {"商品資料", "products"}};
+            String[][] tools = {{"剪貼簿", "clipboard"}, {"常用語", "phrases"}, {"表情", "emoji"}, {"游標", "cursor"}, {"設定", "settings"}, {"商品資料", "products"}, {"線上更新", "update"}};
             for (int i = 0; i < tools.length; i += 3) {
                 LinearLayout r = row();
                 for (int j = i; j < Math.min(i + 3, tools.length); j++) {
                     String page = tools[j][1]; Button b = button(tools[j][0], Color.WHITE, 0xFF25313C, 14, () -> {
-                        if (page.equals("products")) { toolPage = null; openProductImport(); } else { toolPage = page; rebuild(); }
+                        if (page.equals("products")) { toolPage = null; openProductImport(); }
+                        else if (page.equals("update")) { toolPage = null; openUpdater(); }
+                        else { toolPage = page; rebuild(); }
                     });
                     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(54), 1); lp.setMargins(dp(3), dp(2), dp(3), dp(2)); r.addView(b, lp);
                 }
@@ -343,6 +345,7 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
     private void enterScanner() { scanning = true; scanHandled.set(false); rebuild(); }
     private void closeScanner() { scanning = false; stopCamera(); rebuild(); }
     private void openProductImport() { Intent i = new Intent(this, ProductImportActivity.class); i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); }
+    private void openUpdater() { Intent i = new Intent(this, UpdateActivity.class); i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); }
     private void buildScanner() {
         LinearLayout toolbar = row(); toolbar.setGravity(Gravity.CENTER_VERTICAL);
         toolbar.addView(button("‹", 0xFFD6DBE1, 0xFF202124, 20, this::closeScanner), new LinearLayout.LayoutParams(dp(38), dp(32)));
