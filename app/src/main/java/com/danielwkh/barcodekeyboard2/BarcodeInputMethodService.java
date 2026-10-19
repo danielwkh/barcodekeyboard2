@@ -7,6 +7,9 @@ import android.content.ClipboardManager;
 import android.content.ClipData;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
 import android.inputmethodservice.InputMethodService;
 import android.os.Handler;
@@ -19,6 +22,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.view.inputmethod.EditorInfo;
 import android.view.inputmethod.InputConnection;
+import android.text.InputType;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -30,6 +34,7 @@ import android.view.KeyEvent;
 import android.view.SoundEffectConstants;
 import android.view.HapticFeedbackConstants;
 import androidx.camera.core.CameraSelector;
+import androidx.camera.core.Camera;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
@@ -67,14 +72,18 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
     private boolean outputProductName = false;
     private boolean shifted = false;
     private boolean numericMode = false;
+    private boolean torchEnabled = false;
     private String toolPage;
     private String lastScannedText;
     private ProcessCameraProvider cameraProvider;
+    private Camera camera;
+    private Button torchButton;
     private ImageAnalysis imageAnalysis;
     private ExecutorService cameraExecutor;
     private BarcodeScanner barcodeScanner;
     private TextRecognizer textRecognizer;
     private final AtomicBoolean scanHandled = new AtomicBoolean(false);
+    private final AtomicBoolean frameBusy = new AtomicBoolean(false);
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
     @Override public void onCreate() {
@@ -88,6 +97,14 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
     @Override public void onStartInput(EditorInfo info, boolean restarting) {
         super.onStartInput(info, restarting);
         if (!restarting) lastScannedText = null;
+        shifted = false;
+        if (info != null) {
+            int inputClass = info.inputType & InputType.TYPE_MASK_CLASS;
+            numericMode = inputClass == InputType.TYPE_CLASS_NUMBER || inputClass == InputType.TYPE_CLASS_PHONE || inputClass == InputType.TYPE_CLASS_DATETIME;
+            InputConnection ic = getCurrentInputConnection();
+            if (ic != null && info.inputType != InputType.TYPE_NULL) shifted = ic.getCursorCapsMode(info.inputType) != 0;
+        }
+        if (root != null && !scanning && toolPage == null) rebuild();
     }
     @Override public void onWindowShown() { super.onWindowShown(); applyImeWindowHeight(); }
     @Override public void onStartInputView(EditorInfo info, boolean restarting) {
@@ -275,7 +292,11 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
         root.addView(button("按鍵聲音：" + (prefs.getBoolean("key_sound", false) ? "開" : "關"), Color.WHITE, 0xFF202124, 14, () -> { prefs.edit().putBoolean("key_sound", !prefs.getBoolean("key_sound", false)).apply(); rebuild(); }), new LinearLayout.LayoutParams(-1, dp(42)));
         root.addView(text("鍵盤與掃描面板維持相同高度。", 12, 0xFF727D88), new LinearLayout.LayoutParams(-1, dp(28)));
     }
-    private Button enterButton(int width) { return button("↵ 換行", 0xFF07C160, Color.WHITE, 13, this::enter, width); }
+    private Button enterButton(int width) {
+        EditorInfo info = getCurrentInputEditorInfo(); int action = info == null ? EditorInfo.IME_ACTION_NONE : info.imeOptions & EditorInfo.IME_MASK_ACTION;
+        String label = action == EditorInfo.IME_ACTION_SEARCH ? "搜尋" : action == EditorInfo.IME_ACTION_GO ? "前往" : action == EditorInfo.IME_ACTION_SEND ? "傳送" : action == EditorInfo.IME_ACTION_DONE ? "完成" : action == EditorInfo.IME_ACTION_NEXT ? "下一項" : "↵ 換行";
+        return button(label, 0xFF08A85B, Color.WHITE, 13, this::enter, width);
+    }
     private Button button(String label, int color, int fg, int size, Runnable action, int width) {
         Button b = button(label, color, fg, size, action); b.setMinWidth(dp(width)); b.setMinimumWidth(dp(width)); return b;
     }
@@ -286,7 +307,9 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
             addKeyRow(new String[]{"/",":",";","!","?","'","\"","⌫"});
             LinearLayout bottom = row();
             bottom.addView(button("ABC", 0xFFD5D9DE, 0xFF202124, 13, () -> { numericMode = false; rebuild(); }), new LinearLayout.LayoutParams(dp(58), dp(46)));
+            Button comma = button(",", Color.WHITE, 0xFF202124, 17, () -> commit(",")); LinearLayout.LayoutParams c = new LinearLayout.LayoutParams(dp(36), dp(46)); bottom.addView(comma, c);
             bottom.addView(button("空白", Color.WHITE, 0xFF202124, 14, this::space), new LinearLayout.LayoutParams(0, dp(46), 1));
+            Button dot = button(".", Color.WHITE, 0xFF202124, 17, () -> commit(".")); LinearLayout.LayoutParams d = new LinearLayout.LayoutParams(dp(36), dp(46)); bottom.addView(dot, d);
             bottom.addView(enterButton(68), new LinearLayout.LayoutParams(dp(72), dp(46)));
             root.addView(bottom, new LinearLayout.LayoutParams(-1, dp(KEY_ROW_HEIGHT_DP))); return;
         }
@@ -306,7 +329,8 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
         for (String label : labels) {
             boolean shiftKey = label.equals("⇧"), deleteKey = label.equals("⌫");
             int bg = shiftKey && shifted ? 0xFFB8E6CC : (shiftKey || deleteKey ? 0xFFD5D9DE : Color.WHITE);
-            Button b = button(label, bg, 0xFF202124, 17, () -> { if (shiftKey) { shifted = !shifted; rebuild(); } else typeKey(label); });
+            String shown = !shiftKey && !deleteKey && shifted ? label.toUpperCase(Locale.ROOT) : label;
+            Button b = button(shown, bg, 0xFF202124, 17, () -> { if (shiftKey) { shifted = !shifted; rebuild(); } else typeKey(label); });
             LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(46), shiftKey || deleteKey ? 1.25f : 1f); lp.setMargins(dp(2), 0, dp(2), 0); r.addView(b, lp);
         }
         root.addView(r, new LinearLayout.LayoutParams(-1, dp(KEY_ROW_HEIGHT_DP)));
@@ -342,26 +366,46 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) enterScanner();
         else { Intent i = new Intent(this, ScannerActivity.class); i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); }
     }
-    private void enterScanner() { scanning = true; scanHandled.set(false); rebuild(); }
-    private void closeScanner() { scanning = false; stopCamera(); rebuild(); }
+    private void enterScanner() { scanning = true; torchEnabled = false; scanHandled.set(false); rebuild(); }
+    private void closeScanner() { scanning = false; torchEnabled = false; stopCamera(); rebuild(); }
     private void openProductImport() { Intent i = new Intent(this, ProductImportActivity.class); i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); }
     private void openUpdater() { Intent i = new Intent(this, UpdateActivity.class); i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i); }
     private void buildScanner() {
-        LinearLayout toolbar = row(); toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.addView(button("‹", 0xFFD6DBE1, 0xFF202124, 20, this::closeScanner), new LinearLayout.LayoutParams(dp(38), dp(32)));
-        toolbar.addView(button("條碼", !textScan ? 0xFF07C160 : 0xFFD5D9DE, !textScan ? Color.WHITE : 0xFF202124, 12, () -> { textScan = false; scanHandled.set(false); rebuild(); }), new LinearLayout.LayoutParams(dp(54), dp(30)));
-        toolbar.addView(button("文字", textScan ? 0xFF07C160 : 0xFFD5D9DE, textScan ? Color.WHITE : 0xFF202124, 12, () -> { textScan = true; scanHandled.set(false); rebuild(); }), new LinearLayout.LayoutParams(dp(54), dp(30)));
+        LinearLayout toolbar = row(); toolbar.setGravity(Gravity.CENTER_VERTICAL); toolbar.setBackground(shape(0xFFF7F9FC, 14));
+        toolbar.addView(button("‹", 0xFFE8EDF3, 0xFF26313B, 20, this::closeScanner), new LinearLayout.LayoutParams(dp(38), dp(32)));
+        toolbar.addView(button("條碼", !textScan ? 0xFF08A85B : 0xFFE8EDF3, !textScan ? Color.WHITE : 0xFF26313B, 12, () -> { textScan = false; scanHandled.set(false); rebuild(); }), new LinearLayout.LayoutParams(dp(54), dp(30)));
+        toolbar.addView(button("文字", textScan ? 0xFF08A85B : 0xFFE8EDF3, textScan ? Color.WHITE : 0xFF26313B, 12, () -> { textScan = true; scanHandled.set(false); rebuild(); }), new LinearLayout.LayoutParams(dp(54), dp(30)));
         String outputLabel = outputProductName ? "輸出品名" : "輸出條碼";
-        toolbar.addView(button(outputLabel, 0xFFD5D9DE, 0xFF202124, 11, () -> { outputProductName = !outputProductName; rebuild(); }), new LinearLayout.LayoutParams(0, dp(30), 1));
-        root.addView(toolbar, new LinearLayout.LayoutParams(-1, dp(36)));
+        toolbar.addView(button(outputLabel, 0xFFE8EDF3, 0xFF26313B, 11, () -> { outputProductName = !outputProductName; rebuild(); }), new LinearLayout.LayoutParams(0, dp(30), 1));
+        torchButton = button(torchEnabled ? "關燈" : "閃光", 0xFFE8EDF3, 0xFF26313B, 11, this::toggleTorch);
+        toolbar.addView(torchButton, new LinearLayout.LayoutParams(dp(54), dp(30)));
+        root.addView(toolbar, new LinearLayout.LayoutParams(-1, dp(38)));
+
         previewStage = new FrameLayout(this); previewView = new PreviewView(this); previewView.setImplementationMode(PreviewView.ImplementationMode.COMPATIBLE);
+        previewStage.setBackground(shape(0xFF17202B, 14)); previewStage.setClipToOutline(true);
         previewStage.addView(previewView, new FrameLayout.LayoutParams(-1, -1));
-        TextView hint = text(textScan ? "將文字置於鏡頭中" : "將條碼置中；難辨識時會讀取下方數字", 12, Color.WHITE); hint.setBackgroundColor(0x88000000); hint.setPadding(dp(8), dp(4), dp(8), dp(4));
-        FrameLayout.LayoutParams hp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL); hp.bottomMargin = dp(8); previewStage.addView(hint, hp);
-        root.addView(previewStage, new LinearLayout.LayoutParams(-1, 0, 1));
-        LinearLayout bottom = row(); bottom.addView(button("取消掃描", 0xFFD5D9DE, 0xFF202124, 12, this::closeScanner), new LinearLayout.LayoutParams(0, dp(32), 1));
-        bottom.addView(button("商品資料", Color.WHITE, 0xFF202124, 12, this::openProductImport), new LinearLayout.LayoutParams(dp(94), dp(32)));
-        root.addView(bottom, new LinearLayout.LayoutParams(-1, dp(36)));
+        View finder = new View(this) {
+            private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            @Override protected void onDraw(Canvas canvas) {
+                super.onDraw(canvas); float w = getWidth() * .82f, h = getHeight() * .42f;
+                RectF rect = new RectF((getWidth()-w)/2, (getHeight()-h)/2, (getWidth()+w)/2, (getHeight()+h)/2);
+                paint.setColor(0xEFFFFFFF); paint.setStyle(Paint.Style.STROKE); paint.setStrokeWidth(dp(2.5f));
+                float c = dp(22);
+                canvas.drawLine(rect.left,rect.top,rect.left+c,rect.top,paint); canvas.drawLine(rect.left,rect.top,rect.left,rect.top+c,paint);
+                canvas.drawLine(rect.right-c,rect.top,rect.right,rect.top,paint); canvas.drawLine(rect.right,rect.top,rect.right,rect.top+c,paint);
+                canvas.drawLine(rect.left,rect.bottom-c,rect.left,rect.bottom,paint); canvas.drawLine(rect.left,rect.bottom,rect.left+c,rect.bottom,paint);
+                canvas.drawLine(rect.right-c,rect.bottom,rect.right,rect.bottom,paint); canvas.drawLine(rect.right,rect.bottom-c,rect.right,rect.bottom,paint);
+            }
+        };
+        previewStage.addView(finder, new FrameLayout.LayoutParams(-1, -1));
+        TextView hint = text(textScan ? "將文字置於框內" : "將條碼置中；難辨識時會讀取下方數字", 12, Color.WHITE);
+        hint.setBackgroundColor(0xAA111827); hint.setPadding(dp(10), dp(5), dp(10), dp(5));
+        FrameLayout.LayoutParams hp = new FrameLayout.LayoutParams(-2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL); hp.bottomMargin = dp(9); previewStage.addView(hint, hp);
+        LinearLayout.LayoutParams previewLp = new LinearLayout.LayoutParams(-1, 0, 1); previewLp.setMargins(0, dp(5), 0, dp(5)); root.addView(previewStage, previewLp);
+        LinearLayout bottom = row();
+        bottom.addView(button("取消掃描", 0xFFDDE4EC, 0xFF26313B, 13, this::closeScanner), new LinearLayout.LayoutParams(0, dp(38), 1));
+        bottom.addView(button("商品資料", Color.WHITE, 0xFF26313B, 13, this::openProductImport), new LinearLayout.LayoutParams(dp(100), dp(38)));
+        root.addView(bottom, new LinearLayout.LayoutParams(-1, dp(42)));
     }
     private void startInlineCamera() {
         if (!scanning || previewView == null || lifecycle.getCurrentState() != Lifecycle.State.RESUMED) return;
@@ -372,29 +416,44 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
                 cameraProvider = future.get(); cameraProvider.unbindAll();
                 Preview preview = new Preview.Builder().build(); preview.setSurfaceProvider(previewView.getSurfaceProvider());
                 imageAnalysis = new ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build();
-                imageAnalysis.setAnalyzer(cameraExecutor, proxy -> {
-                    if (scanHandled.get()) { proxy.close(); return; }
-                    android.media.Image media = proxy.getImage(); if (media == null) { proxy.close(); return; }
-                    InputImage image = InputImage.fromMediaImage(media, proxy.getImageInfo().getRotationDegrees());
-                    if (textScan) {
-                        textRecognizer.process(image).addOnSuccessListener(result -> {
-                            String value = result.getText().trim(); if (!value.isEmpty() && scanHandled.compareAndSet(false, true)) mainHandler.post(() -> deliverScan(value));
-                        }).addOnCompleteListener(done -> proxy.close());
-                    } else {
-                        barcodeScanner.process(image).addOnSuccessListener(codes -> {
-                            String decoded = null;
-                            for (Barcode code : codes) { String value = code.getRawValue(); if (value != null && !value.trim().isEmpty()) { decoded = value.trim(); break; } }
-                            if (decoded != null) {
-                                String value = decoded;
-                                if (scanHandled.compareAndSet(false, true)) mainHandler.post(() -> deliverScan(value));
-                                proxy.close();
-                            } else scanDigitsWithOcr(image, proxy);
-                        }).addOnFailureListener(error -> scanDigitsWithOcr(image, proxy));
-                    }
-                });
-                cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis);
+                imageAnalysis.setAnalyzer(cameraExecutor, this::analyzeFrame);
+                camera = cameraProvider.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, preview, imageAnalysis);
+                boolean hasFlash = camera.getCameraInfo().hasFlashUnit();
+                if (torchEnabled && hasFlash) camera.getCameraControl().enableTorch(true);
+                if (torchButton != null) { torchButton.setEnabled(hasFlash); if (!hasFlash) torchButton.setText("無閃光"); }
             } catch (Exception e) { Toast.makeText(this, "無法啟動相機", Toast.LENGTH_SHORT).show(); closeScanner(); }
         }, ContextCompat.getMainExecutor(this));
+    }
+    private void toggleTorch() {
+        if (camera == null || !camera.getCameraInfo().hasFlashUnit()) { Toast.makeText(this, "此相機沒有閃光燈", Toast.LENGTH_SHORT).show(); return; }
+        torchEnabled = !torchEnabled;
+        camera.getCameraControl().enableTorch(torchEnabled).addListener(() -> mainHandler.post(() -> {
+            if (torchButton != null) torchButton.setText(torchEnabled ? "關燈" : "閃光");
+        }), ContextCompat.getMainExecutor(this));
+    }
+    private void finishFrame(ImageProxy proxy) {
+        frameBusy.set(false); try { proxy.close(); } catch (Exception ignored) { }
+    }
+    private void analyzeFrame(ImageProxy proxy) {
+        if (scanHandled.get() || !frameBusy.compareAndSet(false, true)) { proxy.close(); return; }
+        try {
+            android.media.Image media = proxy.getImage(); if (media == null) { finishFrame(proxy); return; }
+            InputImage image = InputImage.fromMediaImage(media, proxy.getImageInfo().getRotationDegrees());
+            if (textScan) {
+                textRecognizer.process(image).addOnSuccessListener(result -> {
+                    String value = result.getText().trim(); if (!value.isEmpty() && scanHandled.compareAndSet(false, true)) mainHandler.post(() -> deliverScan(value));
+                }).addOnCompleteListener(done -> finishFrame(proxy));
+            } else {
+                barcodeScanner.process(image).addOnSuccessListener(codes -> {
+                    String decoded = null;
+                    for (Barcode code : codes) { String value = code.getRawValue(); if (value != null && !value.trim().isEmpty()) { decoded = value.trim(); break; } }
+                    if (decoded != null) {
+                        String value = decoded; if (scanHandled.compareAndSet(false, true)) mainHandler.post(() -> deliverScan(value));
+                        finishFrame(proxy);
+                    } else scanDigitsWithOcr(image, proxy);
+                }).addOnFailureListener(error -> scanDigitsWithOcr(image, proxy)).addOnCanceledListener(() -> finishFrame(proxy));
+            }
+        } catch (Exception e) { finishFrame(proxy); }
     }
     private void deliverScan(String value) {
         boolean barcodeScan = !textScan;
@@ -404,11 +463,13 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
         if (barcodeScan) enter();
     }
     private void scanDigitsWithOcr(InputImage image, ImageProxy proxy) {
-        if (scanHandled.get()) { proxy.close(); return; }
-        textRecognizer.process(image).addOnSuccessListener(result -> {
-            String digits = bestPrintedDigits(result);
-            if (digits != null && scanHandled.compareAndSet(false, true)) mainHandler.post(() -> deliverScan(digits));
-        }).addOnCompleteListener(done -> proxy.close());
+        if (scanHandled.get()) { finishFrame(proxy); return; }
+        try {
+            textRecognizer.process(image).addOnSuccessListener(result -> {
+                String digits = bestPrintedDigits(result);
+                if (digits != null && scanHandled.compareAndSet(false, true)) mainHandler.post(() -> deliverScan(digits));
+            }).addOnCompleteListener(done -> finishFrame(proxy));
+        } catch (Exception e) { finishFrame(proxy); }
     }
     private String bestPrintedDigits(com.google.mlkit.vision.text.Text text) {
         String best = null;
@@ -435,5 +496,5 @@ public class BarcodeInputMethodService extends InputMethodService implements Lif
             ic.commitText(value, 1); lastScannedText = value;
         } finally { ic.endBatchEdit(); }
     }
-    private void stopCamera() { try { if (cameraProvider != null) cameraProvider.unbindAll(); } catch (Exception ignored) { } previewView = null; imageAnalysis = null; previewStage = null; }
+    private void stopCamera() { try { if (cameraProvider != null) cameraProvider.unbindAll(); } catch (Exception ignored) { } camera = null; torchButton = null; previewView = null; imageAnalysis = null; previewStage = null; }
 }

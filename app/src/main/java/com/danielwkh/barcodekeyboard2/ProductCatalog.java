@@ -29,6 +29,9 @@ final class ProductCatalog {
         try { return new JSONObject(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(DATA, "{}")).length(); }
         catch (Exception e) { return 0; }
     }
+    static synchronized void clear(Context context) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply();
+    }
 
     static int importWorkbook(Context context, Uri uri) throws Exception {
         byte[] stringsXml = null, productSheetXml = null;
